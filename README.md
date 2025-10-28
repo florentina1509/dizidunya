@@ -136,6 +136,7 @@ Access the app at [http://localhost:3000](http://localhost:3000).
 ##  Status
 
  MVP completed: Full CRUD, Auth, Communities, and Real-Time Chat
+ 
  Future improvements: Follow system, get series uploaded automatically and have a section where users can directly watch latest episodes
 
 ---
