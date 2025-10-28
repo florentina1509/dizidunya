@@ -5,7 +5,7 @@ import os
 # BASE SETTINGS
 # --------------------------------------
 BASE_DIR = Path(__file__).resolve().parent.parent
-SECRET_KEY = 'django-insecure-tf6!i&ykzn6fjd)0hbgp*1=ou6ohot02%b*w*@eu9p3u(e5me('
+SECRET_KEY = "django-insecure-tf6!i&ykzn6fjd)0hbgp*1=ou6ohot02%b*w*@eu9p3u(e5me("
 DEBUG = True
 
 ALLOWED_HOSTS = ["127.0.0.1", "localhost", "0.0.0.0"]
@@ -22,7 +22,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
 
-    # Your app
+    # Your main app
     "main",
 
     # 3rd-party apps
@@ -31,7 +31,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "django_filters",
 
-    # Realtime notifications (Django Channels)
+    # WebSockets
     "channels",
 ]
 
@@ -39,18 +39,20 @@ INSTALLED_APPS = [
 # MIDDLEWARE
 # --------------------------------------
 MIDDLEWARE = [
-    "corsheaders.middleware.CorsMiddleware",  # must come before CommonMiddleware
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "main.middleware.DisableCSRFMiddleware",  
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
+
 # --------------------------------------
-# URLS / APPS
+# URL CONFIGURATION
 # --------------------------------------
 ROOT_URLCONF = "core.urls"
 
@@ -76,7 +78,7 @@ TEMPLATES = [
 # WSGI / ASGI
 # --------------------------------------
 WSGI_APPLICATION = "core.wsgi.application"
-ASGI_APPLICATION = "core.asgi.application"  
+ASGI_APPLICATION = "core.asgi.application"
 
 # --------------------------------------
 # DATABASE
@@ -117,18 +119,16 @@ MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # --------------------------------------
-# CORS & CSRF SETTINGS
+# CORS & CSRF
 # --------------------------------------
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
-
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
-
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [
     "content-type",
@@ -139,15 +139,14 @@ CORS_ALLOW_HEADERS = [
 CORS_EXPOSE_HEADERS = ["Content-Type", "Authorization"]
 
 # --------------------------------------
-# REST FRAMEWORK SETTINGS
+# REST FRAMEWORK (TOKEN AUTH ONLY)
 # --------------------------------------
 REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticatedOrReadOnly",
     ],
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework.authentication.SessionAuthentication",
-        "rest_framework.authentication.TokenAuthentication",
+        "rest_framework.authentication.TokenAuthentication",  # ✅ only this one
     ],
     "DEFAULT_FILTER_BACKENDS": [
         "rest_framework.filters.SearchFilter",
@@ -156,10 +155,10 @@ REST_FRAMEWORK = {
 }
 
 # --------------------------------------
-# CHANNEL LAYERS (for real-time WebSockets)
+# CHANNEL LAYERS (WebSocket backend)
 # --------------------------------------
 CHANNEL_LAYERS = {
     "default": {
-        "BACKEND": "channels.layers.InMemoryChannelLayer",  
+        "BACKEND": "channels.layers.InMemoryChannelLayer",  # use Redis in production
     }
 }

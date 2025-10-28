@@ -6,7 +6,7 @@ from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import AllowAny, IsAuthenticated, IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
-
+from rest_framework.authentication import TokenAuthentication
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
@@ -32,18 +32,44 @@ from .models import (
     CurrentlyWatching,
 )
 
-# -------------------------------
+# ======================================================
+# SAFE TOKEN AUTHENTICATION
+# ======================================================
+class SafeTokenAuthentication(TokenAuthentication):
+    """Prevents logout if token missing or invalid."""
+    def authenticate(self, request):
+        try:
+            auth = super().authenticate(request)
+            if not auth:
+                return None
+            return auth
+        except Exception:
+            return None
+
+
+# ======================================================
+# CUSTOM PERMISSIONS
+# ======================================================
+class IsAdminOrReadOnly(permissions.BasePermission):
+    """Only admin/staff can modify data; everyone can view."""
+    def has_permission(self, request, view):
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        return request.user and (request.user.is_staff or request.user.is_superuser)
+
+
+# ======================================================
 # USER VIEWSET
-# -------------------------------
+# ======================================================
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
     permission_classes = [AllowAny]
 
 
-# -------------------------------
-# AUTHENTICATION (Register / Login / Logout)
-# -------------------------------
+# ======================================================
+# AUTHENTICATION
+# ======================================================
 @csrf_exempt
 @api_view(["POST"])
 @permission_classes([AllowAny])
@@ -58,9 +84,7 @@ def register_user(request):
     if User.objects.filter(username=username).exists():
         return Response({"error": "Username already exists"}, status=400)
 
-    user = User(username=username, email=email)
-    user.set_password(password)
-    user.save()
+    user = User.objects.create_user(username=username, email=email, password=password)
     token, _ = Token.objects.get_or_create(user=user)
 
     return Response(
@@ -117,52 +141,29 @@ def logout_user(request):
     return Response({"message": "No active session"}, status=200)
 
 
-# -------------------------------
-# SERIES VIEWSET
-# -------------------------------
+# ======================================================
+# SERIES VIEWSET — Only Admins Can Modify
+# ======================================================
 class SeriesViewSet(viewsets.ModelViewSet):
+    authentication_classes = [SafeTokenAuthentication]
     queryset = Series.objects.all().order_by("-id")
     serializer_class = SeriesSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsAdminOrReadOnly]
     filter_backends = [filters.SearchFilter]
     search_fields = ["title", "description"]
 
     def perform_create(self, serializer):
-        user = self.request.user if self.request.user.is_authenticated else None
-        if user and user.is_staff:
-            series = serializer.save(user=user)
-            channel_layer = get_channel_layer()
-
-            # Send to global group (for everyone)
-            async_to_sync(channel_layer.group_send)(
-                "notifications",
-                {
-                    "type": "send_notification",
-                    "message": f"🎬 New Dizi added: {series.title} is now live on DiziDünya!",
-                },
-            )
-
-            # Also send to all logged-in user channels (if any exist)
-            for u in User.objects.all():
-                async_to_sync(channel_layer.group_send)(
-                    f"user_{u.id}",
-                    {
-                        "type": "send_notification",
-                        "message": f"🎬 New Dizi added: {series.title} is now live on DiziDünya!",
-                    },
-                )
-
-        else:
-            return Response(
-                {"error": "Only admins can add series."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        series = serializer.save()
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            "notifications",
+            {"type": "send_notification", "message": f"New Dizi added: {series.title}"},
+        )
 
 
-
-# -------------------------------
+# ======================================================
 # WISHLIST VIEWSET
-# -------------------------------
+# ======================================================
 class WishlistViewSet(viewsets.ModelViewSet):
     serializer_class = WishlistSerializer
     permission_classes = [IsAuthenticated]
@@ -171,7 +172,6 @@ class WishlistViewSet(viewsets.ModelViewSet):
         return Wishlist.objects.filter(user=self.request.user)
 
     def create(self, request, *args, **kwargs):
-        user = request.user
         series_id = request.data.get("series_id")
         if not series_id:
             return Response({"error": "series_id is required"}, status=400)
@@ -179,22 +179,15 @@ class WishlistViewSet(viewsets.ModelViewSet):
             series = Series.objects.get(id=series_id)
         except Series.DoesNotExist:
             return Response({"error": "Invalid series_id"}, status=404)
-
-        wishlist_item, created = Wishlist.objects.get_or_create(user=user, series=series)
+        wishlist_item, created = Wishlist.objects.get_or_create(user=request.user, series=series)
         if not created:
-            return Response({"message": "This series is already in your wishlist."}, status=200)
-        serializer = self.get_serializer(wishlist_item)
-        return Response(serializer.data, status=201)
-
-    def perform_destroy(self, instance):
-        if instance.user != self.request.user:
-            raise permissions.PermissionDenied("You can only delete your own wishlist items.")
-        instance.delete()
+            return Response({"message": "Already in wishlist"}, status=200)
+        return Response(self.get_serializer(wishlist_item).data, status=201)
 
 
-# -------------------------------
+# ======================================================
 # WATCHLIST VIEWSET
-# -------------------------------
+# ======================================================
 class WatchlistViewSet(viewsets.ModelViewSet):
     serializer_class = WatchlistSerializer
     permission_classes = [IsAuthenticated]
@@ -203,7 +196,6 @@ class WatchlistViewSet(viewsets.ModelViewSet):
         return Watchlist.objects.filter(user=self.request.user)
 
     def create(self, request, *args, **kwargs):
-        user = request.user
         series_id = request.data.get("series_id")
         if not series_id:
             return Response({"error": "series_id is required"}, status=400)
@@ -211,22 +203,15 @@ class WatchlistViewSet(viewsets.ModelViewSet):
             series = Series.objects.get(id=series_id)
         except Series.DoesNotExist:
             return Response({"error": "Invalid series_id"}, status=404)
-
-        watchlist_item, created = Watchlist.objects.get_or_create(user=user, series=series)
+        watchlist_item, created = Watchlist.objects.get_or_create(user=request.user, series=series)
         if not created:
-            return Response({"message": "This series is already in your watchlist."}, status=200)
-        serializer = self.get_serializer(watchlist_item)
-        return Response(serializer.data, status=201)
-
-    def perform_destroy(self, instance):
-        if instance.user != self.request.user:
-            raise permissions.PermissionDenied("You can only delete your own watchlist items.")
-        instance.delete()
+            return Response({"message": "Already in watchlist"}, status=200)
+        return Response(self.get_serializer(watchlist_item).data, status=201)
 
 
-# -------------------------------
+# ======================================================
 # CURRENTLY WATCHING VIEWSET
-# -------------------------------
+# ======================================================
 class CurrentlyWatchingViewSet(viewsets.ModelViewSet):
     serializer_class = CurrentlyWatchingSerializer
     permission_classes = [IsAuthenticated]
@@ -235,28 +220,22 @@ class CurrentlyWatchingViewSet(viewsets.ModelViewSet):
         return CurrentlyWatching.objects.filter(user=self.request.user)
 
     def create(self, request, *args, **kwargs):
-        user = request.user
         series_id = request.data.get("series_id")
-
         if not series_id:
             return Response({"error": "series_id is required"}, status=400)
-
         try:
             series = Series.objects.get(id=series_id)
         except Series.DoesNotExist:
             return Response({"error": "Invalid series_id"}, status=404)
-
-        watching_item, created = CurrentlyWatching.objects.get_or_create(user=user, series=series)
+        watching_item, created = CurrentlyWatching.objects.get_or_create(user=request.user, series=series)
         if not created:
-            return Response({"message": "Already in currently watching"}, status=200)
-
-        serializer = self.get_serializer(watching_item)
-        return Response(serializer.data, status=201)
+            return Response({"message": "Already watching"}, status=200)
+        return Response(self.get_serializer(watching_item).data, status=201)
 
 
-# -------------------------------
-# COMMUNITY VIEWSET (fixed leave)
-# -------------------------------
+# ======================================================
+# COMMUNITY VIEWSET
+# ======================================================
 class CommunityViewSet(viewsets.ModelViewSet):
     queryset = Community.objects.all().order_by("-created_at")
     serializer_class = CommunitySerializer
@@ -272,7 +251,7 @@ class CommunityViewSet(viewsets.ModelViewSet):
             "notifications",
             {
                 "type": "send_notification",
-                "message": f"💬 New community opened for {community.series.title} ({community.language})!",
+                "message": f"New community opened for {community.series.title} ({community.language})!",
             },
         )
 
@@ -280,111 +259,59 @@ class CommunityViewSet(viewsets.ModelViewSet):
     def join(self, request, pk=None):
         community = self.get_object()
         user = request.user
-
         if community.members.filter(id=user.id).exists():
             return Response({"message": "Already a member"}, status=200)
-
         community.members.add(user)
-        Notification.objects.create(
-            user=user,
-            message=f"You joined {community.series.title} ({community.language}) community!",
-        )
-
-        channel_layer = get_channel_layer()
-        async_to_sync(channel_layer.group_send)(
-            "notifications",
-            {
-                "type": "send_notification",
-                "message": f"👥 {user.username} joined {community.series.title} community!",
-            },
-        )
-
+        Notification.objects.create(user=user, message=f"You joined {community.series.title} community!")
         return Response({"message": "Joined successfully"}, status=200)
 
-    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticatedOrReadOnly])
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated])
     def leave(self, request, pk=None):
         community = self.get_object()
         user = request.user
-
-        if not user.is_authenticated:
-            return Response({"error": "Login required to leave this community."}, status=403)
-
         if not community.members.filter(id=user.id).exists():
-            return Response({"message": "You are not a member of this community."}, status=400)
-
+            return Response({"message": "Not a member"}, status=400)
         community.members.remove(user)
-        Notification.objects.create(
-            user=user,
-            message=f"You left {community.series.title} ({community.language}) community.",
-        )
-
-        channel_layer = get_channel_layer()
-        async_to_sync(channel_layer.group_send)(
-            "notifications",
-            {
-                "type": "send_notification",
-                "message": f"👋 {user.username} left {community.series.title} community.",
-            },
-        )
-
+        Notification.objects.create(user=user, message=f"You left {community.series.title} community.")
         return Response({"message": "Left successfully"}, status=200)
 
-    def destroy(self, request, *args, **kwargs):
-        user = request.user
-        community = self.get_object()
 
-        if not user.is_staff and not user.is_superuser:
-            return Response({"error": "Only admins can delete communities."}, status=403)
-
-        title = community.series.title
-        community.delete()
-        channel_layer = get_channel_layer()
-        async_to_sync(channel_layer.group_send)(
-            "notifications",
-            {"type": "send_notification", "message": f"🗑 {title} community deleted by admin."},
-        )
-        return Response({"message": "Community deleted successfully."}, status=204)
-
-
-# -------------------------------
-# MESSAGE VIEWSET 
-# -------------------------------
+# ======================================================
+# MESSAGE VIEWSET + COMMUNITY MESSAGES ENDPOINT
+# ======================================================
 class MessageViewSet(viewsets.ModelViewSet):
     queryset = Message.objects.all().order_by("created_at")
     serializer_class = MessageSerializer
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [AllowAny]
 
     def perform_create(self, serializer):
         user = self.request.user if self.request.user.is_authenticated else User.objects.first()
         serializer.save(user=user)
 
-    @action(detail=True, methods=["get"], url_path="messages", permission_classes=[AllowAny])
-    def community_messages(self, request, pk=None):
-        messages = Message.objects.filter(community_id=pk).order_by("created_at")
-        serializer = self.get_serializer(messages, many=True)
-        return Response(serializer.data)
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def community_messages(request, community_id):
+    if not Community.objects.filter(id=community_id).exists():
+        return Response({"error": "Community not found"}, status=404)
+    messages = Message.objects.filter(community_id=community_id).order_by("created_at")
+    serializer = MessageSerializer(messages, many=True)
+    return Response(serializer.data, status=200)
 
 
-# -------------------------------
+# ======================================================
 # POST VIEWSET
-# -------------------------------
+# ======================================================
 class PostViewSet(viewsets.ModelViewSet):
     queryset = Post.objects.all()
     serializer_class = PostSerializer
-    permission_classes = [permissions.AllowAny]
-
-    def get_queryset(self):
-        community_id = self.request.query_params.get("community_id")
-        queryset = Post.objects.all()
-        if community_id:
-            queryset = queryset.filter(community_id=community_id)
-        return queryset
+    permission_classes = [AllowAny]
 
 
-# -------------------------------
+# ======================================================
 # NOTIFICATION VIEWSET
-# -------------------------------
+# ======================================================
 class NotificationViewSet(viewsets.ModelViewSet):
     queryset = Notification.objects.all().order_by("-created_at")
     serializer_class = NotificationSerializer
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [AllowAny]
