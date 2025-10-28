@@ -130,6 +130,12 @@ Access the app at [http://localhost:3000](http://localhost:3000).
 
 <img width="1639" height="986" alt="profilepage" src="https://github.com/user-attachments/assets/29f456cd-6801-4842-830a-b5d2eafe2f93" />
 
+---
+##  Links
+
+Logo created by me on Canva - https://www.canva.com/design/DAG1NHkCR4M/qrLoOjbWLvw06fY4E1Uz1A/edit?utm_content=DAG1NHkCR4M&utm_campaign=designshare&utm_medium=link2&utm_source=sharebutton 
+
+Planning and sketches completed on ExcaliDraw - https://excalidraw.com/#json=0UVQ5xgZi3fcb7H7jf1tF,QIlm7IgmYavB-JTPSKQ28Q 
 
 ---
 
